@@ -1,10 +1,13 @@
 import express from 'express';
 import passport from 'passport';
+import dotenv from 'dotenv';
 import { Strategy as GitHubStrategy } from 'passport-github2';
 import crypto from 'crypto-js';
 import { Octokit } from '@octokit/rest';
 import { githubUserDb } from '../database/github-db.js';
 import { generateGitHubToken, authenticateToken } from '../middleware/github-auth.js';
+
+dotenv.config();
 
 const router = express.Router();
 
@@ -18,7 +21,7 @@ const requiredEnvVars = {
 };
 
 const missingVars = Object.entries(requiredEnvVars)
-  .filter(([key, value]) => !value || value.includes('your_') || value.includes('here'))
+  .filter(([key, value]) => !value)
   .map(([key]) => key);
 
 const isGitHubConfigured = missingVars.length === 0;
@@ -32,55 +35,55 @@ if (!isGitHubConfigured) {
 // Only configure GitHub OAuth strategy if all required variables are present
 if (isGitHubConfigured) {
   console.log('✅ GitHub OAuth properly configured');
-  
+
   // GitHub OAuth Strategy Configuration
   passport.use(new GitHubStrategy({
     clientID: process.env.GITHUB_CLIENT_ID,
     clientSecret: process.env.GITHUB_CLIENT_SECRET,
     callbackURL: process.env.GITHUB_CALLBACK_URL || "http://localhost:3001/api/auth/github/callback"
   },
-  async (accessToken, refreshToken, profile, done) => {
-    try {
-      console.log('📝 GitHub OAuth callback received for user:', profile.username);
-      
-      // Encrypt the access token for secure storage
-      const encryptedToken = crypto.AES.encrypt(
-        accessToken, 
-        process.env.GITHUB_TOKEN_SECRET || 'default-encryption-key'
-      ).toString();
-      
-      // Get additional user information from GitHub API
-      const octokit = new Octokit({ auth: accessToken });
-      const { data: githubUser } = await octokit.rest.users.getAuthenticated();
-      const { data: emails } = await octokit.rest.users.listEmailsForAuthenticatedUser();
-      
-      const primaryEmail = emails.find(email => email.primary)?.email || githubUser.email;
-      
-      // Create or update user in our database
-      const user = await githubUserDb.createOrUpdateUser({
-        githubId: profile.id,
-        username: profile.username,
-        displayName: profile.displayName || profile.username,
-        email: primaryEmail,
-        avatarUrl: githubUser.avatar_url,
-        githubAccessToken: encryptedToken,
-        githubData: {
-          publicRepos: githubUser.public_repos,
-          followers: githubUser.followers,
-          following: githubUser.following,
-          location: githubUser.location,
-          company: githubUser.company,
-          blog: githubUser.blog,
-          bio: githubUser.bio
-        }
-      });
-      
-      return done(null, user);
-    } catch (error) {
-      console.error('❌ GitHub OAuth error:', error);
-      return done(error, null);
-    }
-  }));
+    async (accessToken, refreshToken, profile, done) => {
+      try {
+        console.log('📝 GitHub OAuth callback received for user:', profile.username);
+
+        // Encrypt the access token for secure storage
+        const encryptedToken = crypto.AES.encrypt(
+          accessToken,
+          process.env.GITHUB_TOKEN_SECRET || 'default-encryption-key'
+        ).toString();
+
+        // Get additional user information from GitHub API
+        const octokit = new Octokit({ auth: accessToken });
+        const { data: githubUser } = await octokit.rest.users.getAuthenticated();
+        const { data: emails } = await octokit.rest.users.listEmailsForAuthenticatedUser();
+
+        const primaryEmail = emails.find(email => email.primary)?.email || githubUser.email;
+
+        // Create or update user in our database
+        const user = await githubUserDb.createOrUpdateUser({
+          githubId: profile.id,
+          username: profile.username,
+          displayName: profile.displayName || profile.username,
+          email: primaryEmail,
+          avatarUrl: githubUser.avatar_url,
+          githubAccessToken: encryptedToken,
+          githubData: {
+            publicRepos: githubUser.public_repos,
+            followers: githubUser.followers,
+            following: githubUser.following,
+            location: githubUser.location,
+            company: githubUser.company,
+            blog: githubUser.blog,
+            bio: githubUser.bio
+          }
+        });
+
+        return done(null, user);
+      } catch (error) {
+        console.error('❌ GitHub OAuth error:', error);
+        return done(error, null);
+      }
+    }));
 
   // Passport serialization
   passport.serializeUser((user, done) => {
@@ -100,7 +103,7 @@ if (isGitHubConfigured) {
 // Authentication status endpoint
 router.get('/status', (req, res) => {
   if (!isGitHubConfigured) {
-    return res.json({ 
+    return res.json({
       needsSetup: true,
       error: 'GitHub OAuth not configured',
       missingVars,
@@ -108,7 +111,7 @@ router.get('/status', (req, res) => {
     });
   }
 
-  res.json({ 
+  res.json({
     needsSetup: false,
     isAuthenticated: !!req.user,
     authMethod: 'github'
@@ -118,18 +121,18 @@ router.get('/status', (req, res) => {
 // GitHub OAuth endpoints - only if configured
 if (isGitHubConfigured) {
   // Initiate GitHub OAuth
-  router.get('/github', passport.authenticate('github', { 
+  router.get('/github', passport.authenticate('github', {
     scope: ['user:email', 'repo'] // Request access to user info and repositories
   }));
 
   // GitHub OAuth callback
-  router.get('/github/callback', 
+  router.get('/github/callback',
     passport.authenticate('github', { failureRedirect: '/login?error=github_auth_failed' }),
     async (req, res) => {
       try {
         // Generate our internal JWT token
         const token = generateGitHubToken(req.user);
-        
+
         // Redirect to frontend with token
         const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
         res.redirect(`${clientUrl}/?auth_token=${token}`);
@@ -147,7 +150,7 @@ if (isGitHubConfigured) {
       if (!user) {
         return res.status(404).json({ error: 'User not found' });
       }
-      
+
       // Return user data without sensitive information
       res.json({
         user: {
@@ -180,20 +183,20 @@ if (isGitHubConfigured) {
   router.get('/repositories', authenticateToken, async (req, res) => {
     try {
       const { page = 1, per_page = 30, sort = 'updated', type = 'all' } = req.query;
-      
+
       const user = await githubUserDb.getUserById(req.user.userId);
       if (!user) {
         return res.status(404).json({ error: 'User not found' });
       }
-      
+
       // Decrypt GitHub access token
       const accessToken = crypto.AES.decrypt(
         user.github_access_token,
         process.env.GITHUB_TOKEN_SECRET || 'default-encryption-key'
       ).toString(crypto.enc.Utf8);
-      
+
       const octokit = new Octokit({ auth: accessToken });
-      
+
       // Fetch user's repositories
       const { data: repos } = await octokit.rest.repos.listForAuthenticatedUser({
         type, // 'all', 'owner', 'public', 'private', 'member'
@@ -201,7 +204,7 @@ if (isGitHubConfigured) {
         per_page: parseInt(per_page),
         page: parseInt(page)
       });
-      
+
       // Transform repository data for frontend
       const repositories = repos.map(repo => ({
         id: repo.id,
@@ -220,7 +223,7 @@ if (isGitHubConfigured) {
         ssh_url: repo.ssh_url,
         html_url: repo.html_url
       }));
-      
+
       res.json({
         repositories,
         pagination: {
@@ -229,7 +232,7 @@ if (isGitHubConfigured) {
           has_more: repos.length === parseInt(per_page)
         }
       });
-      
+
     } catch (error) {
       console.error('❌ Error fetching repositories:', error);
       res.status(500).json({ error: 'Failed to fetch repositories' });
@@ -240,31 +243,31 @@ if (isGitHubConfigured) {
   router.get('/repositories/search', authenticateToken, async (req, res) => {
     try {
       const { q, page = 1, per_page = 30 } = req.query;
-      
+
       if (!q) {
         return res.status(400).json({ error: 'Search query is required' });
       }
-      
+
       const user = await githubUserDb.getUserById(req.user.userId);
       if (!user) {
         return res.status(404).json({ error: 'User not found' });
       }
-      
+
       // Decrypt GitHub access token
       const accessToken = crypto.AES.decrypt(
         user.github_access_token,
         process.env.GITHUB_TOKEN_SECRET || 'default-encryption-key'
       ).toString(crypto.enc.Utf8);
-      
+
       const octokit = new Octokit({ auth: accessToken });
-      
+
       // Search user's repositories
       const { data } = await octokit.rest.search.repos({
         q: `${q} user:${user.username}`,
         per_page: parseInt(per_page),
         page: parseInt(page)
       });
-      
+
       const repositories = data.items.map(repo => ({
         id: repo.id,
         name: repo.name,
@@ -282,7 +285,7 @@ if (isGitHubConfigured) {
         ssh_url: repo.ssh_url,
         html_url: repo.html_url
       }));
-      
+
       res.json({
         repositories,
         total: data.total_count,
@@ -292,7 +295,7 @@ if (isGitHubConfigured) {
           total_pages: Math.ceil(data.total_count / parseInt(per_page))
         }
       });
-      
+
     } catch (error) {
       console.error('❌ Error searching repositories:', error);
       res.status(500).json({ error: 'Failed to search repositories' });
@@ -302,22 +305,22 @@ if (isGitHubConfigured) {
 } else {
   // If GitHub is not configured, return setup messages for all OAuth endpoints
   router.get('/github', (req, res) => {
-    res.status(500).json({ 
-      error: 'GitHub OAuth not configured', 
+    res.status(500).json({
+      error: 'GitHub OAuth not configured',
       missingVars,
       message: 'Please configure GitHub OAuth credentials in your .env file'
     });
   });
 
   router.get('/github/callback', (req, res) => {
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'GitHub OAuth not configured',
       message: 'Please configure GitHub OAuth credentials in your .env file'
     });
   });
 
   router.get('/user', (req, res) => {
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'GitHub OAuth not configured',
       message: 'Please configure GitHub OAuth credentials in your .env file'
     });
@@ -328,14 +331,14 @@ if (isGitHubConfigured) {
   });
 
   router.get('/repositories', (req, res) => {
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'GitHub OAuth not configured',
       message: 'Please configure GitHub OAuth credentials in your .env file'
     });
   });
 
   router.get('/repositories/search', (req, res) => {
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'GitHub OAuth not configured',
       message: 'Please configure GitHub OAuth credentials in your .env file'
     });

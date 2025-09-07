@@ -1,14 +1,9 @@
-// Load environment variables from .env file
-import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-// Load .env file from project root
-dotenv.config({ path: path.join(__dirname, '../.env') });
 
 console.log('PORT from env:', process.env.PORT);
 
@@ -46,13 +41,13 @@ const server = http.createServer(app);
 
 // Session configuration for OAuth
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'claude-ui-session-secret-change-in-production',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { 
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-  }
+    secret: process.env.SESSION_SECRET || 'claude-ui-session-secret-change-in-production',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    }
 }));
 
 // Initialize Passport
@@ -130,7 +125,7 @@ app.get('/api/projects', authenticateToken, async (req, res) => {
         const result = await GitHubRepositoryService.listRepositories(req.user.userId, {
             per_page: 50
         });
-        
+
         // Transform for backward compatibility
         const projects = result.repositories.map(repo => ({
             name: repo.fullName.replace('/', '-'),
@@ -140,7 +135,7 @@ app.get('/api/projects', authenticateToken, async (req, res) => {
             sessions: [], // Will be populated by SpecStory integration
             sessionMeta: { total: 0, hasMore: false }
         }));
-        
+
         res.json(projects);
     } catch (error) {
         console.error('❌ Error fetching projects:', error);
@@ -158,7 +153,7 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
 
         // Parse GitHub repository from project name
         const [owner, repo] = projectName.replace(/-/g, '/').split('/');
-        
+
         if (!owner || !repo) {
             return res.status(400).json({ error: 'Invalid project format' });
         }
@@ -170,8 +165,8 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             filePath
         );
 
-        res.json({ 
-            content: fileData.content, 
+        res.json({
+            content: fileData.content,
             path: filePath,
             sha: fileData.sha
         });
@@ -195,7 +190,7 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
 
         // Parse GitHub repository from project name
         const [owner, repo] = projectName.replace(/-/g, '/').split('/');
-        
+
         if (!owner || !repo) {
             return res.status(400).json({ error: 'Invalid project format' });
         }
@@ -225,10 +220,10 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
 app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) => {
     try {
         const { projectName } = req.params;
-        
+
         // Parse GitHub repository from project name
         const [owner, repo] = projectName.replace(/-/g, '/').split('/');
-        
+
         if (!owner || !repo) {
             return res.status(400).json({ error: 'Invalid project format' });
         }
@@ -238,7 +233,7 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
             owner,
             repo
         );
-        
+
         res.json(files || []);
     } catch (error) {
         console.error('❌ File tree error:', error.message);
@@ -277,19 +272,19 @@ function handleChatConnection(ws) {
                 console.log('💬 User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Repository:', data.options?.repository || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
-                
+
                 // Modified to work with GitHub repositories
                 await spawnClaudeWithGitHub(data.command, data.options, ws);
             } else if (data.type === 'cursor-command') {
                 console.log('🖱️ Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Repository:', data.options?.repository || 'Unknown');
-                
+
                 // Modified to work with GitHub repositories  
                 await spawnCursorWithGitHub(data.command, data.options, ws);
             } else if (data.type === 'abort-session') {
                 console.log('🛑 Abort session request:', data.sessionId);
                 const provider = data.provider || 'claude';
-                const success = provider === 'cursor' 
+                const success = provider === 'cursor'
                     ? abortCursorSession(data.sessionId)
                     : abortClaudeSession(data.sessionId);
                 ws.send(JSON.stringify({
@@ -371,7 +366,7 @@ function handleShellConnection(ws) {
 
                 // TODO: Implement GitHub repository shell integration
                 // For now, proceed with standard shell
-                
+
                 try {
                     let shellCommand;
                     if (isPlainShell) {
@@ -639,12 +634,12 @@ Agent instructions:`;
 
 // Serve React app for all other routes
 app.get('*', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    res.sendFile(path.join(__dirname, '../dist/index.html'));
-  } else {
-    // In development, redirect to Vite dev server
-    res.redirect(`http://localhost:${process.env.VITE_PORT || 3001}`);
-  }
+    if (process.env.NODE_ENV === 'production') {
+        res.sendFile(path.join(__dirname, '../dist/index.html'));
+    } else {
+        // In development, redirect to Vite dev server
+        res.redirect(`http://localhost:${process.env.VITE_PORT || 3001}`);
+    }
 });
 
 const PORT = process.env.PORT || 3001;
