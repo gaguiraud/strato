@@ -41,6 +41,14 @@ A desktop and mobile UI for [Claude Code](https://docs.anthropic.com/en/docs/cla
 
 ## Features
 
+### 🚀 New GitHub Integration
+- **GitHub OAuth Authentication** - Secure authentication using your GitHub account
+- **Repository Management** - Access and work with all your GitHub repositories (public & private)
+- **Remote File Operations** - Edit files directly in your GitHub repositories via API
+- **Automatic Branch & PR Creation** - Claude creates branches and pull requests automatically
+- **SpecStory Integration** - Git-native chat history stored as markdown in `.specstory/history/`
+
+### 💻 Core Features  
 - **Responsive Design** - Works seamlessly across desktop, tablet, and mobile so you can also use Claude Code from mobile 
 - **Interactive Chat Interface** - Built-in chat interface for seamless communication with Claude Code or Cursor
 - **Integrated Shell Terminal** - Direct access to Claude Code or Cursor CLI through built-in shell functionality
@@ -76,6 +84,38 @@ npm install
 ```bash
 cp .env.example .env
 # Edit .env with your preferred settings
+```
+
+### 🔐 GitHub OAuth Setup (Required)
+
+This application now uses **GitHub OAuth for authentication** and **GitHub API for repository management**. You need to set up a GitHub OAuth App:
+
+1. **Create a GitHub OAuth App:**
+   - Go to [GitHub Developer Settings](https://github.com/settings/applications/new)
+   - Set **Application name**: `Claude Code UI` (or your preferred name)
+   - Set **Homepage URL**: `http://localhost:3000`
+   - Set **Authorization callback URL**: `http://localhost:3001/api/auth/github/callback`
+   - Click **Register application**
+
+2. **Configure OAuth credentials:**
+```bash
+# Copy the GitHub OAuth example
+cp .env.github-example .env
+
+# Edit .env and add your OAuth credentials:
+GITHUB_CLIENT_ID=your_github_client_id_here
+GITHUB_CLIENT_SECRET=your_github_client_secret_here
+GITHUB_TOKEN_SECRET=your-super-secure-encryption-key-here-32-chars-minimum
+JWT_SECRET=your-jwt-secret-key-here-change-in-production
+SESSION_SECRET=your-session-secret-here-change-in-production
+```
+
+3. **Generate secure secrets:**
+```bash
+# Generate secure random secrets (Linux/macOS):
+openssl rand -base64 32  # Use for GITHUB_TOKEN_SECRET
+openssl rand -base64 32  # Use for JWT_SECRET  
+openssl rand -base64 32  # Use for SESSION_SECRET
 ```
 
 4. **Start the application:**
