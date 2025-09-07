@@ -27,6 +27,7 @@ import MobileNav from './components/MobileNav';
 import ToolsSettings from './components/ToolsSettings';
 import QuickSettingsPanel from './components/QuickSettingsPanel';
 import GitHubLoginForm from './components/GitHubLoginForm';
+import GitHubSetupPage from './components/GitHubSetupPage';
 
 import { ThemeProvider } from './contexts/ThemeContext';
 import { GitHubAuthProvider, useGitHubAuth } from './contexts/GitHubAuthContext';
@@ -37,7 +38,7 @@ import { useVersionCheck } from './hooks/useVersionCheck';
 
 // Protected Route component for GitHub authentication
 const ProtectedRoute = ({ children }) => {
-  const { user, isLoading } = useGitHubAuth();
+  const { user, isLoading, needsSetup, setupInfo } = useGitHubAuth();
 
   if (isLoading) {
     return (
@@ -48,6 +49,10 @@ const ProtectedRoute = ({ children }) => {
         </div>
       </div>
     );
+  }
+
+  if (needsSetup) {
+    return <GitHubSetupPage setupInfo={setupInfo} />;
   }
 
   if (!user) {

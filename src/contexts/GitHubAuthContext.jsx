@@ -9,7 +9,9 @@ const GitHubAuthContext = createContext({
   error: null,
   repositories: [],
   fetchRepositories: () => {},
-  isLoadingRepos: false
+  isLoadingRepos: false,
+  needsSetup: false,
+  setupInfo: null
 });
 
 export const useGitHubAuth = () => {
@@ -27,6 +29,8 @@ export const GitHubAuthProvider = ({ children }) => {
   const [error, setError] = useState(null);
   const [repositories, setRepositories] = useState([]);
   const [isLoadingRepos, setIsLoadingRepos] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [setupInfo, setSetupInfo] = useState(null);
 
   // Check authentication status on mount
   useEffect(() => {
@@ -55,7 +59,22 @@ export const GitHubAuthProvider = ({ children }) => {
       setIsLoading(true);
       setError(null);
       
-      // If we have a token, verify it
+      // First, check if GitHub OAuth is configured
+      const statusResponse = await fetch('/api/auth/status');
+      const statusData = await statusResponse.json();
+      
+      if (statusData.needsSetup) {
+        setNeedsSetup(true);
+        setSetupInfo({
+          missingVars: statusData.missingVars,
+          error: statusData.error,
+          message: statusData.message
+        });
+        setIsLoading(false);
+        return;
+      }
+      
+      // If GitHub is configured but we have a token, verify it
       if (token) {
         try {
           const userResponse = await authenticatedFetch('/api/auth/user');
@@ -63,6 +82,7 @@ export const GitHubAuthProvider = ({ children }) => {
           if (userResponse.ok) {
             const userData = await userResponse.json();
             setUser(userData.user);
+            setNeedsSetup(false);
           } else {
             // Token is invalid
             localStorage.removeItem('auth-token');
@@ -85,6 +105,11 @@ export const GitHubAuthProvider = ({ children }) => {
   };
 
   const login = () => {
+    if (needsSetup) {
+      setError('GitHub OAuth is not configured. Please follow the setup instructions.');
+      return;
+    }
+    
     // Redirect to GitHub OAuth
     window.location.href = '/api/auth/github';
   };
@@ -110,6 +135,11 @@ export const GitHubAuthProvider = ({ children }) => {
     if (!token) {
       console.warn('No token available for repository fetch');
       return;
+    }
+
+    if (needsSetup) {
+      console.warn('GitHub OAuth not configured');
+      return { repositories: [] };
     }
 
     try {
@@ -142,7 +172,7 @@ export const GitHubAuthProvider = ({ children }) => {
   };
 
   const searchRepositories = async (query, options = {}) => {
-    if (!token || !query) {
+    if (!token || !query || needsSetup) {
       return { repositories: [] };
     }
 
@@ -203,7 +233,9 @@ export const GitHubAuthProvider = ({ children }) => {
     fetchRepositories,
     searchRepositories,
     isLoadingRepos,
-    authenticatedFetch
+    authenticatedFetch,
+    needsSetup,
+    setupInfo
   };
 
   return (
