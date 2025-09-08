@@ -4,12 +4,21 @@ import { promisify } from 'util';
 import path from 'path';
 import { promises as fs } from 'fs';
 import { extractProjectDirectory } from '../projects.js';
+import { activeRepositorySessions } from '../index.js';
 
 const router = express.Router();
 const execAsync = promisify(exec);
 
 // Helper function to get the actual project path from the encoded project name
 async function getActualProjectPath(projectName) {
+  // First check if there's an active repository session (GitHub integration)
+  const activeSession = activeRepositorySessions.get(projectName);
+  if (activeSession) {
+    console.log(`📁 Using active repository session path: ${activeSession.tempPath}`);
+    return activeSession.tempPath;
+  }
+  
+  // Fallback to legacy filesystem approach
   try {
     return await extractProjectDirectory(projectName);
   } catch (error) {
@@ -20,7 +29,14 @@ async function getActualProjectPath(projectName) {
 }
 
 // Helper function to validate git repository
-async function validateGitRepository(projectPath) {
+async function validateGitRepository(projectPath, projectName) {
+  // Special handling for GitHub integration - check if it's a session that hasn't been cloned yet
+  const activeSession = activeRepositorySessions.get(projectName);
+  if (!activeSession && projectName && projectName.includes('-')) {
+    // This looks like a GitHub project name but no active session exists
+    throw new Error('Repository not available. Please start a chat session to clone the repository.');
+  }
+
   try {
     // Check if directory exists
     await fs.access(projectPath);
@@ -58,7 +74,7 @@ router.get('/status', async (req, res) => {
     const projectPath = await getActualProjectPath(project);
     
     // Validate git repository
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
 
     // Get current branch
     const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: projectPath });
@@ -120,7 +136,7 @@ router.get('/diff', async (req, res) => {
     const projectPath = await getActualProjectPath(project);
     
     // Validate git repository
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
     
     // Check if file is untracked
     const { stdout: statusOutput } = await execAsync(`git status --porcelain "${file}"`, { cwd: projectPath });
@@ -167,7 +183,7 @@ router.post('/commit', async (req, res) => {
     const projectPath = await getActualProjectPath(project);
     
     // Validate git repository
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
     
     // Stage selected files
     for (const file of files) {
@@ -196,7 +212,7 @@ router.get('/branches', async (req, res) => {
     const projectPath = await getActualProjectPath(project);
     
     // Validate git repository
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
     
     // Get all branches
     const { stdout } = await execAsync('git branch -a', { cwd: projectPath });
@@ -431,7 +447,7 @@ router.get('/remote-status', async (req, res) => {
 
   try {
     const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
 
     // Get current branch
     const { stdout: currentBranch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: projectPath });
@@ -502,7 +518,7 @@ router.post('/fetch', async (req, res) => {
 
   try {
     const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
 
     // Get current branch and its upstream remote
     const { stdout: currentBranch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: projectPath });
@@ -543,7 +559,7 @@ router.post('/pull', async (req, res) => {
 
   try {
     const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
 
     // Get current branch and its upstream remote
     const { stdout: currentBranch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: projectPath });
@@ -610,7 +626,7 @@ router.post('/push', async (req, res) => {
 
   try {
     const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
 
     // Get current branch and its upstream remote
     const { stdout: currentBranch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: projectPath });
@@ -680,7 +696,7 @@ router.post('/publish', async (req, res) => {
 
   try {
     const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
 
     // Get current branch to verify it matches the requested branch
     const { stdout: currentBranch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: projectPath });
@@ -756,7 +772,7 @@ router.post('/discard', async (req, res) => {
 
   try {
     const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
 
     // Check file status to determine correct discard command
     const { stdout: statusOutput } = await execAsync(`git status --porcelain "${file}"`, { cwd: projectPath });
@@ -795,7 +811,7 @@ router.post('/delete-untracked', async (req, res) => {
 
   try {
     const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    await validateGitRepository(projectPath, project);
 
     // Check if file is actually untracked
     const { stdout: statusOutput } = await execAsync(`git status --porcelain "${file}"`, { cwd: projectPath });

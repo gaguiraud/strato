@@ -82,6 +82,20 @@ const wss = new WebSocketServer({
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 
+// Track active repository sessions and their temporary paths
+const activeRepositorySessions = new Map(); // projectName -> { tempPath, sessionId, repository }
+
+// Helper function to clean up repository session
+function cleanupRepositorySession(tempPath) {
+  for (const [projectName, session] of activeRepositorySessions) {
+    if (session.tempPath === tempPath) {
+      console.log('🧹 Removing active repository session:', projectName);
+      activeRepositorySessions.delete(projectName);
+      break;
+    }
+  }
+}
+
 app.use(cors());
 app.use(express.json());
 
@@ -286,7 +300,7 @@ function handleChatConnection(ws) {
                 const provider = data.provider || 'claude';
                 const success = provider === 'cursor'
                     ? abortCursorSession(data.sessionId)
-                    : abortClaudeSession(data.sessionId);
+                    : await abortClaudeSession(data.sessionId);
                 ws.send(JSON.stringify({
                     type: 'session-aborted',
                     sessionId: data.sessionId,
@@ -310,9 +324,88 @@ function handleChatConnection(ws) {
 
 // Modified Claude spawning for GitHub integration
 async function spawnClaudeWithGitHub(command, options, ws) {
-    // TODO: Integrate with SpecStory and GitHub workspace
-    // For now, use legacy implementation
-    return await spawnClaude(command, options, ws);
+    const modifiedOptions = { ...options };
+    
+    // If we have repository info, clone it to a temporary directory
+    if (modifiedOptions.repository) {
+        const repository = modifiedOptions.repository;
+        console.log('🔄 GitHub integration: Preparing repository workspace for:', repository.fullName);
+        
+        try {
+            // Create a temporary directory for this session
+            const tempDir = path.join(os.tmpdir(), 'claude-repos', `${repository.name}-${Date.now()}`);
+            await fsPromises.mkdir(tempDir, { recursive: true });
+            
+            console.log('📁 Created temporary directory:', tempDir);
+            
+            // Clone the repository
+            console.log('🔄 Cloning repository:', repository.cloneUrl);
+            ws.send(JSON.stringify({
+                type: 'status-update',
+                message: `Cloning repository ${repository.fullName}...`
+            }));
+            
+            await new Promise((resolve, reject) => {
+                const gitClone = spawn('git', ['clone', repository.cloneUrl, tempDir], {
+                    stdio: 'pipe'
+                });
+                
+                let output = '';
+                let errorOutput = '';
+                
+                gitClone.stdout.on('data', (data) => {
+                    output += data.toString();
+                });
+                
+                gitClone.stderr.on('data', (data) => {
+                    errorOutput += data.toString();
+                });
+                
+                gitClone.on('close', (code) => {
+                    if (code === 0) {
+                        console.log('✅ Repository cloned successfully');
+                        ws.send(JSON.stringify({
+                            type: 'status-update',
+                            message: `Repository ${repository.fullName} cloned successfully`
+                        }));
+                        resolve();
+                    } else {
+                        console.error('❌ Failed to clone repository:', errorOutput);
+                        reject(new Error(`Git clone failed: ${errorOutput}`));
+                    }
+                });
+            });
+            
+            // Set the working directory to the cloned repository
+            modifiedOptions.cwd = tempDir;
+            modifiedOptions.tempRepoPath = tempDir; // Store for cleanup later
+            
+            // Register the active repository session
+            const projectName = repository.fullName.replace('/', '-');
+            activeRepositorySessions.set(projectName, {
+                tempPath: tempDir,
+                sessionId: modifiedOptions.sessionId,
+                repository: repository
+            });
+            
+            console.log('🔄 GitHub integration: Setting working directory to cloned repo:', tempDir);
+            console.log('📋 Registered active repository session:', projectName);
+            
+        } catch (error) {
+            console.error('❌ Error setting up repository workspace:', error);
+            ws.send(JSON.stringify({
+                type: 'error',
+                error: `Failed to clone repository: ${error.message}`
+            }));
+            throw error;
+        }
+    } else if (!modifiedOptions.cwd || !modifiedOptions.cwd.startsWith('/')) {
+        // Fallback to current directory if no repository info
+        modifiedOptions.cwd = process.cwd();
+        console.log('🔄 GitHub integration: Using current working directory:', modifiedOptions.cwd);
+    }
+    
+    return await spawnClaude(command, modifiedOptions, ws);
 }
 
 // Modified Cursor spawning for GitHub integration  
@@ -663,3 +756,6 @@ async function startServer() {
 }
 
 startServer();
+
+// Export for cleanup from other modules
+export { cleanupRepositorySession, activeRepositorySessions };

@@ -153,8 +153,8 @@ function AppContent() {
     navigate(`/session/${session.id}`);
   };
 
-  const handleNewSession = (repository) => {
-    setSelectedRepository(repository);
+  const handleNewSession = (project) => {
+    setSelectedRepository(project.repository);
     setSelectedSession(null);
     setActiveTab('chat');
     navigate('/');

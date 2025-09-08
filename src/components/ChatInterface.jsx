@@ -2775,7 +2775,8 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
           resume: !!effectiveSessionId,
           model: cursorModel,
           skipPermissions: toolsSettings?.skipPermissions || false,
-          toolsSettings: toolsSettings
+          toolsSettings: toolsSettings,
+          repository: selectedProject.repository // Pass GitHub repository info for cloning
         }
       });
     } else {
@@ -2790,7 +2791,8 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
           resume: !!currentSessionId,
           toolsSettings: toolsSettings,
           permissionMode: permissionMode,
-          images: uploadedImages // Pass images to backend
+          images: uploadedImages, // Pass images to backend
+          repository: selectedProject.repository // Pass GitHub repository info for cloning
         }
       });
     }
