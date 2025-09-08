@@ -21,7 +21,7 @@ router.get('/cli/list', async (req, res) => {
     const { promisify } = await import('util');
     const exec = promisify(spawn);
     
-    const process = spawn('claude', ['mcp', 'list'], {
+    const process = spawn('/Users/guillaumeaguiraud/.pocket-server/bin/node', ['/Users/guillaumeaguiraud/.bun/bin/claude', 'mcp', 'list'], {
       stdio: ['pipe', 'pipe', 'pipe']
     });
     
@@ -106,7 +106,7 @@ router.post('/cli/add', async (req, res) => {
       console.log('📁 Running in project directory:', projectPath);
     }
     
-    const process = spawn('claude', cliArgs, spawnOptions);
+    const process = spawn('/Users/guillaumeaguiraud/.pocket-server/bin/node', ['/Users/guillaumeaguiraud/.bun/bin/claude', ...cliArgs], spawnOptions);
     
     let stdout = '';
     let stderr = '';
@@ -199,7 +199,7 @@ router.post('/cli/add-json', async (req, res) => {
       console.log('📁 Running in project directory:', projectPath);
     }
     
-    const process = spawn('claude', cliArgs, spawnOptions);
+    const process = spawn('/Users/guillaumeaguiraud/.pocket-server/bin/node', ['/Users/guillaumeaguiraud/.bun/bin/claude', ...cliArgs], spawnOptions);
     
     let stdout = '';
     let stderr = '';
@@ -267,7 +267,7 @@ router.delete('/cli/remove/:name', async (req, res) => {
     
     console.log('🔧 Running Claude CLI command:', 'claude', cliArgs.join(' '));
     
-    const process = spawn('claude', cliArgs, {
+    const process = spawn('/Users/guillaumeaguiraud/.pocket-server/bin/node', ['/Users/guillaumeaguiraud/.bun/bin/claude', ...cliArgs], {
       stdio: ['pipe', 'pipe', 'pipe']
     });
     
@@ -310,7 +310,7 @@ router.get('/cli/get/:name', async (req, res) => {
     
     const { spawn } = await import('child_process');
     
-    const process = spawn('claude', ['mcp', 'get', name], {
+    const process = spawn('/Users/guillaumeaguiraud/.pocket-server/bin/node', ['/Users/guillaumeaguiraud/.bun/bin/claude', 'mcp', 'get', name], {
       stdio: ['pipe', 'pipe', 'pipe']
     });
     

@@ -1,21 +1,22 @@
 /*
- * App.jsx - Main Application Component with Session Protection System
+ * App.jsx - Main Application Component with GitHub Integration
  * 
- * SESSION PROTECTION SYSTEM OVERVIEW:
- * ===================================
+ * GITHUB INTEGRATION OVERVIEW:
+ * ============================
  * 
- * Problem: Automatic project updates from WebSocket would refresh the sidebar and clear chat messages
- * during active conversations, creating a poor user experience.
+ * This application now uses GitHub OAuth for authentication and GitHub API for repository management.
+ * Key changes from the previous filesystem-based approach:
  * 
- * Solution: Track "active sessions" and pause project updates during conversations.
+ * 1. Authentication: GitHub OAuth replaces local SQLite authentication
+ * 2. Project Management: GitHub repositories replace local filesystem projects
+ * 3. File Operations: GitHub Contents API replaces direct filesystem operations
+ * 4. Session Storage: SpecStory integration for Git-native chat history
  * 
  * How it works:
- * 1. When user sends message → session marked as "active" 
- * 2. Project updates are skipped while session is active
- * 3. When conversation completes/aborts → session marked as "inactive"
- * 4. Project updates resume normally
- * 
- * Handles both existing sessions (with real IDs) and new sessions (with temporary IDs).
+ * - Users authenticate with GitHub OAuth
+ * - Select repositories to work with from their GitHub account
+ * - Claude operations create branches and PRs automatically
+ * - Chat history stored as markdown in .specstory/history/ directory
  */
 
 import React, { useState, useEffect } from 'react';
@@ -25,16 +26,41 @@ import MainContent from './components/MainContent';
 import MobileNav from './components/MobileNav';
 import ToolsSettings from './components/ToolsSettings';
 import QuickSettingsPanel from './components/QuickSettingsPanel';
+import GitHubLoginForm from './components/GitHubLoginForm';
+import GitHubSetupPage from './components/GitHubSetupPage';
 
 import { ThemeProvider } from './contexts/ThemeContext';
-import { AuthProvider } from './contexts/AuthContext';
+import { GitHubAuthProvider, useGitHubAuth } from './contexts/GitHubAuthContext';
 import { TaskMasterProvider } from './contexts/TaskMasterContext';
 import { TasksSettingsProvider } from './contexts/TasksSettingsContext';
 import { WebSocketProvider, useWebSocketContext } from './contexts/WebSocketContext';
-import ProtectedRoute from './components/ProtectedRoute';
 import { useVersionCheck } from './hooks/useVersionCheck';
-import { api, authenticatedFetch } from './utils/api';
 
+// Protected Route component for GitHub authentication
+const ProtectedRoute = ({ children }) => {
+  const { user, isLoading, needsSetup, setupInfo } = useGitHubAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center space-y-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (needsSetup) {
+    return <GitHubSetupPage setupInfo={setupInfo} />;
+  }
+
+  if (!user) {
+    return <GitHubLoginForm />;
+  }
+
+  return children;
+};
 
 // Main App component with routing
 function AppContent() {
@@ -44,13 +70,12 @@ function AppContent() {
   const { updateAvailable, latestVersion, currentVersion } = useVersionCheck('siteboon', 'claudecodeui');
   const [showVersionModal, setShowVersionModal] = useState(false);
   
-  const [projects, setProjects] = useState([]);
-  const [selectedProject, setSelectedProject] = useState(null);
+  const { user, repositories, fetchRepositories, isLoadingRepos } = useGitHubAuth();
+  const [selectedRepository, setSelectedRepository] = useState(null);
   const [selectedSession, setSelectedSession] = useState(null);
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' or 'files'
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [showToolsSettings, setShowToolsSettings] = useState(false);
   const [showQuickSettings, setShowQuickSettings] = useState(false);
@@ -70,11 +95,9 @@ function AppContent() {
     const saved = localStorage.getItem('sendByCtrlEnter');
     return saved !== null ? JSON.parse(saved) : false;
   });
-  // Session Protection System: Track sessions with active conversations to prevent
-  // automatic project updates from interrupting ongoing chats. When a user sends
-  // a message, the session is marked as "active" and project updates are paused
-  // until the conversation completes or is aborted.
-  const [activeSessions, setActiveSessions] = useState(new Set()); // Track sessions with active conversations
+  
+  // Session Protection System: Track sessions with active conversations
+  const [activeSessions, setActiveSessions] = useState(new Set());
   
   const { ws, sendMessage, messages } = useWebSocketContext();
 
@@ -90,206 +113,27 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    // Fetch projects on component mount
-    fetchProjects();
-  }, []);
-
-  // Helper function to determine if an update is purely additive (new sessions/projects)
-  // vs modifying existing selected items that would interfere with active conversations
-  const isUpdateAdditive = (currentProjects, updatedProjects, selectedProject, selectedSession) => {
-    if (!selectedProject || !selectedSession) {
-      // No active session to protect, allow all updates
-      return true;
+    // Fetch repositories when user is authenticated
+    if (user) {
+      fetchRepositories();
     }
+  }, [user]);
 
-    // Find the selected project in both current and updated data
-    const currentSelectedProject = currentProjects?.find(p => p.name === selectedProject.name);
-    const updatedSelectedProject = updatedProjects?.find(p => p.name === selectedProject.name);
-
-    if (!currentSelectedProject || !updatedSelectedProject) {
-      // Project structure changed significantly, not purely additive
-      return false;
-    }
-
-    // Find the selected session in both current and updated project data
-    const currentSelectedSession = currentSelectedProject.sessions?.find(s => s.id === selectedSession.id);
-    const updatedSelectedSession = updatedSelectedProject.sessions?.find(s => s.id === selectedSession.id);
-
-    if (!currentSelectedSession || !updatedSelectedSession) {
-      // Selected session was deleted or significantly changed, not purely additive
-      return false;
-    }
-
-    // Check if the selected session's content has changed (modification vs addition)
-    // Compare key fields that would affect the loaded chat interface
-    const sessionUnchanged = 
-      currentSelectedSession.id === updatedSelectedSession.id &&
-      currentSelectedSession.title === updatedSelectedSession.title &&
-      currentSelectedSession.created_at === updatedSelectedSession.created_at &&
-      currentSelectedSession.updated_at === updatedSelectedSession.updated_at;
-
-    // This is considered additive if the selected session is unchanged
-    // (new sessions may have been added elsewhere, but active session is protected)
-    return sessionUnchanged;
-  };
-
-  // Handle WebSocket messages for real-time project updates
+  // Handle WebSocket messages for real-time updates
   useEffect(() => {
     if (messages.length > 0) {
       const latestMessage = messages[messages.length - 1];
       
-      if (latestMessage.type === 'projects_updated') {
-        
-        // Session Protection Logic: Allow additions but prevent changes during active conversations
-        // This allows new sessions/projects to appear in sidebar while protecting active chat messages
-        // We check for two types of active sessions:
-        // 1. Existing sessions: selectedSession.id exists in activeSessions
-        // 2. New sessions: temporary "new-session-*" identifiers in activeSessions (before real session ID is received)
-        const hasActiveSession = (selectedSession && activeSessions.has(selectedSession.id)) ||
-                                 (activeSessions.size > 0 && Array.from(activeSessions).some(id => id.startsWith('new-session-')));
-        
-        if (hasActiveSession) {
-          // Allow updates but be selective: permit additions, prevent changes to existing items
-          const updatedProjects = latestMessage.projects;
-          const currentProjects = projects;
-          
-          // Check if this is purely additive (new sessions/projects) vs modification of existing ones
-          const isAdditiveUpdate = isUpdateAdditive(currentProjects, updatedProjects, selectedProject, selectedSession);
-          
-          if (!isAdditiveUpdate) {
-            // Skip updates that would modify existing selected session/project
-            return;
-          }
-          // Continue with additive updates below
-        }
-        
-        // Update projects state with the new data from WebSocket
-        const updatedProjects = latestMessage.projects;
-        setProjects(updatedProjects);
-        
-        // Update selected project if it exists in the updated projects
-        if (selectedProject) {
-          const updatedSelectedProject = updatedProjects.find(p => p.name === selectedProject.name);
-          if (updatedSelectedProject) {
-            setSelectedProject(updatedSelectedProject);
-            
-            // Update selected session only if it was deleted - avoid unnecessary reloads
-            if (selectedSession) {
-              const updatedSelectedSession = updatedSelectedProject.sessions?.find(s => s.id === selectedSession.id);
-              if (!updatedSelectedSession) {
-                // Session was deleted
-                setSelectedSession(null);
-              }
-              // Don't update if session still exists with same ID - prevents reload
-            }
-          }
-        }
+      if (latestMessage.type === 'repository_updated') {
+        // Handle repository updates (e.g., new branches, commits)
+        console.log('Repository updated:', latestMessage);
+        // Refresh repositories or update specific repository state
       }
     }
-  }, [messages, selectedProject, selectedSession, activeSessions]);
+  }, [messages]);
 
-  const fetchProjects = async () => {
-    try {
-      setIsLoadingProjects(true);
-      const response = await api.projects();
-      const data = await response.json();
-      
-      // Always fetch Cursor sessions for each project so we can combine views
-      for (let project of data) {
-        try {
-          const url = `/api/cursor/sessions?projectPath=${encodeURIComponent(project.fullPath || project.path)}`;
-          const cursorResponse = await authenticatedFetch(url);
-          if (cursorResponse.ok) {
-            const cursorData = await cursorResponse.json();
-            if (cursorData.success && cursorData.sessions) {
-              project.cursorSessions = cursorData.sessions;
-            } else {
-              project.cursorSessions = [];
-            }
-          } else {
-            project.cursorSessions = [];
-          }
-        } catch (error) {
-          console.error(`Error fetching Cursor sessions for project ${project.name}:`, error);
-          project.cursorSessions = [];
-        }
-      }
-      
-      // Optimize to preserve object references when data hasn't changed
-      setProjects(prevProjects => {
-        // If no previous projects, just set the new data
-        if (prevProjects.length === 0) {
-          return data;
-        }
-        
-        // Check if the projects data has actually changed
-        const hasChanges = data.some((newProject, index) => {
-          const prevProject = prevProjects[index];
-          if (!prevProject) return true;
-          
-          // Compare key properties that would affect UI
-          return (
-            newProject.name !== prevProject.name ||
-            newProject.displayName !== prevProject.displayName ||
-            newProject.fullPath !== prevProject.fullPath ||
-            JSON.stringify(newProject.sessionMeta) !== JSON.stringify(prevProject.sessionMeta) ||
-            JSON.stringify(newProject.sessions) !== JSON.stringify(prevProject.sessions) ||
-            JSON.stringify(newProject.cursorSessions) !== JSON.stringify(prevProject.cursorSessions)
-          );
-        }) || data.length !== prevProjects.length;
-        
-        // Only update if there are actual changes
-        return hasChanges ? data : prevProjects;
-      });
-      
-      // Don't auto-select any project - user should choose manually
-    } catch (error) {
-      console.error('Error fetching projects:', error);
-    } finally {
-      setIsLoadingProjects(false);
-    }
-  };
-
-  // Expose fetchProjects globally for component access
-  window.refreshProjects = fetchProjects;
-
-  // Handle URL-based session loading
-  useEffect(() => {
-    if (sessionId && projects.length > 0) {
-      // Only switch tabs on initial load, not on every project update
-      const shouldSwitchTab = !selectedSession || selectedSession.id !== sessionId;
-      // Find the session across all projects
-      for (const project of projects) {
-        let session = project.sessions?.find(s => s.id === sessionId);
-        if (session) {
-          setSelectedProject(project);
-          setSelectedSession({ ...session, __provider: 'claude' });
-          // Only switch to chat tab if we're loading a different session
-          if (shouldSwitchTab) {
-            setActiveTab('chat');
-          }
-          return;
-        }
-        // Also check Cursor sessions
-        const cSession = project.cursorSessions?.find(s => s.id === sessionId);
-        if (cSession) {
-          setSelectedProject(project);
-          setSelectedSession({ ...cSession, __provider: 'cursor' });
-          if (shouldSwitchTab) {
-            setActiveTab('chat');
-          }
-          return;
-        }
-      }
-      
-      // If session not found, it might be a newly created session
-      // Just navigate to it and it will be found when the sidebar refreshes
-      // Don't redirect to home, let the session load naturally
-    }
-  }, [sessionId, projects, navigate]);
-
-  const handleProjectSelect = (project) => {
-    setSelectedProject(project);
+  const handleRepositorySelect = (repository) => {
+    setSelectedRepository(repository);
     setSelectedSession(null);
     navigate('/');
     if (isMobile) {
@@ -299,18 +143,8 @@ function AppContent() {
 
   const handleSessionSelect = (session) => {
     setSelectedSession(session);
-    // Only switch to chat tab when user explicitly selects a session
-    // This prevents tab switching during automatic updates
     if (activeTab !== 'git' && activeTab !== 'preview') {
       setActiveTab('chat');
-    }
-    
-    // For Cursor sessions, we need to set the session ID differently
-    // since they're persistent and not created by Claude
-    const provider = localStorage.getItem('selected-provider') || 'claude';
-    if (provider === 'cursor') {
-      // Cursor sessions have persistent IDs
-      sessionStorage.setItem('cursorSessionId', session.id);
     }
     
     if (isMobile) {
@@ -320,7 +154,7 @@ function AppContent() {
   };
 
   const handleNewSession = (project) => {
-    setSelectedProject(project);
+    setSelectedRepository(project.repository);
     setSelectedSession(null);
     setActiveTab('chat');
     navigate('/');
@@ -330,100 +164,27 @@ function AppContent() {
   };
 
   const handleSessionDelete = (sessionId) => {
-    // If the deleted session was currently selected, clear it
     if (selectedSession?.id === sessionId) {
       setSelectedSession(null);
       navigate('/');
     }
-    
-    // Update projects state locally instead of full refresh
-    setProjects(prevProjects => 
-      prevProjects.map(project => ({
-        ...project,
-        sessions: project.sessions?.filter(session => session.id !== sessionId) || [],
-        sessionMeta: {
-          ...project.sessionMeta,
-          total: Math.max(0, (project.sessionMeta?.total || 0) - 1)
-        }
-      }))
-    );
+    // TODO: Implement SpecStory session deletion
   };
-
-
 
   const handleSidebarRefresh = async () => {
-    // Refresh only the sessions for all projects, don't change selected state
-    try {
-      const response = await api.projects();
-      const freshProjects = await response.json();
-      
-      // Optimize to preserve object references and minimize re-renders
-      setProjects(prevProjects => {
-        // Check if projects data has actually changed
-        const hasChanges = freshProjects.some((newProject, index) => {
-          const prevProject = prevProjects[index];
-          if (!prevProject) return true;
-          
-          return (
-            newProject.name !== prevProject.name ||
-            newProject.displayName !== prevProject.displayName ||
-            newProject.fullPath !== prevProject.fullPath ||
-            JSON.stringify(newProject.sessionMeta) !== JSON.stringify(prevProject.sessionMeta) ||
-            JSON.stringify(newProject.sessions) !== JSON.stringify(prevProject.sessions)
-          );
-        }) || freshProjects.length !== prevProjects.length;
-        
-        return hasChanges ? freshProjects : prevProjects;
-      });
-      
-      // If we have a selected project, make sure it's still selected after refresh
-      if (selectedProject) {
-        const refreshedProject = freshProjects.find(p => p.name === selectedProject.name);
-        if (refreshedProject) {
-          // Only update selected project if it actually changed
-          if (JSON.stringify(refreshedProject) !== JSON.stringify(selectedProject)) {
-            setSelectedProject(refreshedProject);
-          }
-          
-          // If we have a selected session, try to find it in the refreshed project
-          if (selectedSession) {
-            const refreshedSession = refreshedProject.sessions?.find(s => s.id === selectedSession.id);
-            if (refreshedSession && JSON.stringify(refreshedSession) !== JSON.stringify(selectedSession)) {
-              setSelectedSession(refreshedSession);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error refreshing sidebar:', error);
+    // Refresh repositories
+    if (user) {
+      await fetchRepositories();
     }
   };
 
-  const handleProjectDelete = (projectName) => {
-    // If the deleted project was currently selected, clear it
-    if (selectedProject?.name === projectName) {
-      setSelectedProject(null);
-      setSelectedSession(null);
-      navigate('/');
-    }
-    
-    // Update projects state locally instead of full refresh
-    setProjects(prevProjects => 
-      prevProjects.filter(project => project.name !== projectName)
-    );
-  };
-
-  // Session Protection Functions: Manage the lifecycle of active sessions
-  
-  // markSessionAsActive: Called when user sends a message to mark session as protected
-  // This includes both real session IDs and temporary "new-session-*" identifiers
+  // Session Protection Functions
   const markSessionAsActive = (sessionId) => {
     if (sessionId) {
       setActiveSessions(prev => new Set([...prev, sessionId]));
     }
   };
 
-  // markSessionAsInactive: Called when conversation completes/aborts to re-enable project updates
   const markSessionAsInactive = (sessionId) => {
     if (sessionId) {
       setActiveSessions(prev => {
@@ -434,14 +195,10 @@ function AppContent() {
     }
   };
 
-  // replaceTemporarySession: Called when WebSocket provides real session ID for new sessions
-  // Removes temporary "new-session-*" identifiers and adds the real session ID
-  // This maintains protection continuity during the transition from temporary to real session
   const replaceTemporarySession = (realSessionId) => {
     if (realSessionId) {
       setActiveSessions(prev => {
         const newSet = new Set();
-        // Keep all non-temporary sessions and add the real session ID
         for (const sessionId of prev) {
           if (!sessionId.startsWith('new-session-')) {
             newSet.add(sessionId);
@@ -453,21 +210,40 @@ function AppContent() {
     }
   };
 
+  // Transform repositories to match the old project structure for compatibility
+  const projects = repositories.map(repo => ({
+    name: repo.fullName.replace('/', '-'),
+    displayName: repo.name,
+    fullPath: repo.fullName,
+    path: repo.fullName,
+    repository: repo, // Add full repository data
+    sessions: [], // TODO: Populate with SpecStory sessions
+    sessionMeta: { total: 0, hasMore: false },
+    // Additional GitHub-specific metadata
+    githubData: {
+      private: repo.private,
+      fork: repo.fork,
+      language: repo.language,
+      stargazersCount: repo.stargazersCount,
+      forksCount: repo.forksCount,
+      updatedAt: repo.updatedAt,
+      defaultBranch: repo.defaultBranch,
+      htmlUrl: repo.htmlUrl
+    }
+  }));
+
   // Version Upgrade Modal Component
   const VersionUpgradeModal = () => {
     if (!showVersionModal) return null;
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center">
-        {/* Backdrop */}
         <div 
           className="fixed inset-0 bg-black/50 backdrop-blur-sm"
           onClick={() => setShowVersionModal(false)}
         />
         
-        {/* Modal */}
         <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 w-full max-w-md mx-4 p-6 space-y-4">
-          {/* Header */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
@@ -490,7 +266,6 @@ function AppContent() {
             </button>
           </div>
 
-          {/* Version Info */}
           <div className="space-y-3">
             <div className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Current Version</span>
@@ -502,7 +277,6 @@ function AppContent() {
             </div>
           </div>
 
-          {/* Upgrade Instructions */}
           <div className="space-y-3">
             <h3 className="text-sm font-medium text-gray-900 dark:text-white">How to upgrade:</h3>
             <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-3 border">
@@ -515,7 +289,6 @@ function AppContent() {
             </p>
           </div>
 
-          {/* Actions */}
           <div className="flex gap-2 pt-2">
             <button
               onClick={() => setShowVersionModal(false)}
@@ -525,7 +298,6 @@ function AppContent() {
             </button>
             <button
               onClick={() => {
-                // Copy command to clipboard
                 navigator.clipboard.writeText('git checkout main && git pull && npm install');
                 setShowVersionModal(false);
               }}
@@ -547,14 +319,14 @@ function AppContent() {
           <div className="h-full overflow-hidden">
             <Sidebar
               projects={projects}
-              selectedProject={selectedProject}
+              selectedProject={selectedRepository ? projects.find(p => p.repository.id === selectedRepository.id) : null}
               selectedSession={selectedSession}
-              onProjectSelect={handleProjectSelect}
+              onProjectSelect={handleRepositorySelect}
               onSessionSelect={handleSessionSelect}
               onNewSession={handleNewSession}
               onSessionDelete={handleSessionDelete}
-              onProjectDelete={handleProjectDelete}
-              isLoading={isLoadingProjects}
+              onProjectDelete={() => {}} // TODO: Implement repository removal
+              isLoading={isLoadingRepos}
               onRefresh={handleSidebarRefresh}
               onShowSettings={() => setShowToolsSettings(true)}
               updateAvailable={updateAvailable}
@@ -592,14 +364,14 @@ function AppContent() {
           >
             <Sidebar
               projects={projects}
-              selectedProject={selectedProject}
+              selectedProject={selectedRepository ? projects.find(p => p.repository.id === selectedRepository.id) : null}
               selectedSession={selectedSession}
-              onProjectSelect={handleProjectSelect}
+              onProjectSelect={handleRepositorySelect}
               onSessionSelect={handleSessionSelect}
               onNewSession={handleNewSession}
               onSessionDelete={handleSessionDelete}
-              onProjectDelete={handleProjectDelete}
-              isLoading={isLoadingProjects}
+              onProjectDelete={() => {}} // TODO: Implement repository removal
+              isLoading={isLoadingRepos}
               onRefresh={handleSidebarRefresh}
               onShowSettings={() => setShowToolsSettings(true)}
               updateAvailable={updateAvailable}
@@ -611,10 +383,10 @@ function AppContent() {
         </div>
       )}
 
-      {/* Main Content Area - Flexible */}
+      {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         <MainContent
-          selectedProject={selectedProject}
+          selectedProject={selectedRepository ? projects.find(p => p.repository.id === selectedRepository.id) : null}
           selectedSession={selectedSession}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
@@ -623,7 +395,7 @@ function AppContent() {
           messages={messages}
           isMobile={isMobile}
           onMenuClick={() => setSidebarOpen(true)}
-          isLoading={isLoadingProjects}
+          isLoading={isLoadingRepos}
           onInputFocusChange={setIsInputFocused}
           onSessionActive={markSessionAsActive}
           onSessionInactive={markSessionAsInactive}
@@ -645,7 +417,8 @@ function AppContent() {
           isInputFocused={isInputFocused}
         />
       )}
-      {/* Quick Settings Panel - Only show on chat tab */}
+
+      {/* Quick Settings Panel */}
       {activeTab === 'chat' && (
         <QuickSettingsPanel
           isOpen={showQuickSettings}
@@ -687,11 +460,11 @@ function AppContent() {
   );
 }
 
-// Root App component with router
+// Root App component with router and providers
 function App() {
   return (
     <ThemeProvider>
-      <AuthProvider>
+      <GitHubAuthProvider>
         <WebSocketProvider>
           <TasksSettingsProvider>
             <TaskMasterProvider>
@@ -706,7 +479,7 @@ function App() {
             </TaskMasterProvider>
           </TasksSettingsProvider>
         </WebSocketProvider>
-      </AuthProvider>
+      </GitHubAuthProvider>
     </ThemeProvider>
   );
 }

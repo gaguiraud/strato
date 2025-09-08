@@ -235,7 +235,7 @@ async function spawnClaude(command, options = {}, ws) {
     console.log('🔍 Full command args:', JSON.stringify(args, null, 2));
     console.log('🔍 Final Claude command will be: claude ' + args.join(' '));
     
-    const claudeProcess = spawnFunction('claude', args, {
+    const claudeProcess = spawnFunction('/Users/guillaumeaguiraud/.pocket-server/bin/node', ['/Users/guillaumeaguiraud/.bun/bin/claude', ...args], {
       cwd: workingDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env } // Inherit all environment variables
@@ -244,6 +244,11 @@ async function spawnClaude(command, options = {}, ws) {
     // Attach temp file info to process for cleanup later
     claudeProcess.tempImagePaths = tempImagePaths;
     claudeProcess.tempDir = tempDir;
+    
+    // Attach repo directory for cleanup if it exists
+    if (options.tempRepoPath) {
+      claudeProcess.tempRepoPath = options.tempRepoPath;
+    }
     
     // Store process reference for potential abort
     const processKey = capturedSessionId || sessionId || Date.now().toString();
@@ -335,6 +340,22 @@ async function spawnClaude(command, options = {}, ws) {
         }
       }
       
+      // Clean up temporary repository directory if any
+      if (claudeProcess.tempRepoPath) {
+        console.log('🧹 Cleaning up temporary repository:', claudeProcess.tempRepoPath);
+        await fs.rm(claudeProcess.tempRepoPath, { recursive: true, force: true }).catch(err => 
+          console.error(`Failed to delete temp repository ${claudeProcess.tempRepoPath}:`, err)
+        );
+        
+        // Clean up active repository sessions
+        try {
+          const { cleanupRepositorySession } = await import('./index.js');
+          cleanupRepositorySession(claudeProcess.tempRepoPath);
+        } catch (error) {
+          console.error('Error cleaning up repository session:', error);
+        }
+      }
+      
       if (code === 0) {
         resolve();
       } else {
@@ -374,10 +395,27 @@ async function spawnClaude(command, options = {}, ws) {
   });
 }
 
-function abortClaudeSession(sessionId) {
+async function abortClaudeSession(sessionId) {
   const process = activeClaudeProcesses.get(sessionId);
   if (process) {
     console.log(`🛑 Aborting Claude session: ${sessionId}`);
+    
+    // Clean up temporary repository directory if any
+    if (process.tempRepoPath) {
+      console.log('🧹 Cleaning up temporary repository during abort:', process.tempRepoPath);
+      await fs.rm(process.tempRepoPath, { recursive: true, force: true }).catch(err => 
+        console.error(`Failed to delete temp repository ${process.tempRepoPath} during abort:`, err)
+      );
+      
+      // Clean up active repository sessions
+      try {
+        const { cleanupRepositorySession } = await import('./index.js');
+        cleanupRepositorySession(process.tempRepoPath);
+      } catch (error) {
+        console.error('Error cleaning up repository session during abort:', error);
+      }
+    }
+    
     process.kill('SIGTERM');
     activeClaudeProcesses.delete(sessionId);
     return true;
